@@ -1,0 +1,15 @@
+{
+  "name": "converge-client",
+  "version": "0.1.0",
+  "scripts": {
+    "build": "tsc --outDir dist",
+    "example": "parcel test/index.html --dist-dir parcel-build"
+  },
+  "dependencies": {
+    "events": "^3.3.0",
+    "socket.io-client": "^4.4.1"
+  },
+  "devDependencies": {
+    "parcel": "^2.5.0"
+  }
+}
