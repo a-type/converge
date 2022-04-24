@@ -1,14 +1,16 @@
 {
-  "name": "converge",
+  "name": "@a-type/converge",
   "version": "0.1.0",
   "private": true,
   "repository": "git@github.com:a-type/converge.git",
   "author": "Grant Forrest <gaforres@gmail.com>",
   "license": "MIT",
+  "scripts": {
+    "build": "concurrently -n client,server \"yarn workspace @a-type/converge-client build\" \"yarn workspace @a-type/converge-server build\""
+  },
   "dependencies": {},
   "devDependencies": {
-    "buffer": "^6.0.3",
-    "typescript": "^4.6.3"
+    "concurrently": "^7.1.0"
   },
   "workspaces": [
     "packages/*"

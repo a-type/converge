@@ -1,15 +1,21 @@
 {
-  "name": "converge-client",
+  "name": "@a-type/converge-client",
+  "public": true,
   "version": "0.1.0",
+  "main": "./dist/index.js",
+  "module": "./dist-esm/index.js",
+  "typings": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsc --outDir dist",
-    "example": "parcel test/index.html --dist-dir parcel-build"
+    "build": "concurrently -n esm,cjs \"tsc --outDir dist-esm\" \"tsc --outDir dist --module commonjs\"",
+    "example": "parcel test/index.html --dist-dir parcel-build",
+    "prepublish": "yarn build"
   },
   "dependencies": {
     "events": "^3.3.0",
     "socket.io-client": "^4.4.1"
   },
   "devDependencies": {
+    "concurrently": "^7.1.0",
     "parcel": "^2.5.0"
   }
 }

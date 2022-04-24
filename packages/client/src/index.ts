@@ -24,10 +24,16 @@ export declare interface ConvergeClient {
   ): boolean;
 }
 
+type Logger = (
+  level: 'debug' | 'info' | 'warn' | 'error',
+  ...args: any[]
+) => void;
+
 export class ConvergeClient extends EventEmitter {
   private signalling: Socket;
   private peers: Record<string, ConvergeRemotePeer> = {};
   private _presence: any;
+  private log: Logger;
 
   get presence(): any {
     return this._presence;
@@ -41,14 +47,18 @@ export class ConvergeClient extends EventEmitter {
     options: {
       server: string;
       topic: string;
+      logger?: Logger;
     } = {
       server: 'ws://localhost:2000',
       topic: 'default',
+      logger: () => {},
     },
   ) {
     super();
 
     this.signalling = io(options.server);
+
+    this.log = options.logger;
 
     this.signalling.on('connect', this.handleSignallingConnect);
     this.signalling.on('disconnect', this.handleSignallingDisconnect);
@@ -59,24 +69,24 @@ export class ConvergeClient extends EventEmitter {
     this.signalling.on('candidate', this.handleCandidate);
     this.signalling.on('peer-disconnected', this.handlePeerDisconnected);
 
-    this.signalling.emit('join', options.topic);
+    this.signalling.emit('join', { room: options.topic });
   }
 
   private handleSignallingConnect = () => {
-    console.log('Signalling connected');
+    this.log('info', 'Signalling connected');
     this.emit('connected', this.id);
   };
 
   private handleSignallingDisconnect = () => {
-    console.log('Signalling disconnected');
+    this.log('warn', 'Signalling disconnected');
   };
 
   private handleSignallingError = (err: Error) => {
-    console.error('Signalling error', err);
+    this.log('error', 'Signalling error', err);
   };
 
   private handlePeers = (peers: string[]) => {
-    console.log('Peers', peers);
+    this.log('debug', 'Peers', peers);
     for (const peerId of peers) {
       // connect to remote peers on first connect
       const peer = this.setupRemotePeer(peerId);
@@ -107,7 +117,7 @@ export class ConvergeClient extends EventEmitter {
   };
 
   private handlePeerConnect = (peerId: string) => {
-    console.log('Peer connected', peerId);
+    this.log('info', 'Peer connected', peerId);
     this.emit('peerConnected', peerId);
     // initial presence
     this.peers[peerId]!.send(JSON.stringify(['p', this.presence]));
@@ -118,7 +128,7 @@ export class ConvergeClient extends EventEmitter {
     peerId: string;
     sourcePeerId: string;
   }) => {
-    console.debug('Got offer', offerMessage);
+    this.log('debug', 'Got offer', offerMessage);
     const peer = this.setupRemotePeer(offerMessage.sourcePeerId);
     peer.handleOffer(offerMessage);
   };
@@ -128,7 +138,7 @@ export class ConvergeClient extends EventEmitter {
     peerId: string;
     sourcePeerId: string;
   }) => {
-    console.debug('Got answer', answerMessage);
+    this.log('debug', 'Got answer', answerMessage);
     const peer = this.peers[answerMessage.sourcePeerId];
     if (peer) {
       peer.handleAnswer(answerMessage);
@@ -140,7 +150,7 @@ export class ConvergeClient extends EventEmitter {
     peerId: string;
     sourcePeerId: string;
   }) => {
-    console.debug('Got candidate', candidateMessage);
+    this.log('debug', 'Got candidate', candidateMessage);
     const peer = this.peers[candidateMessage.sourcePeerId];
     if (peer) {
       peer.handleCandidate(candidateMessage);
@@ -148,7 +158,7 @@ export class ConvergeClient extends EventEmitter {
   };
 
   private handleLocalOffer = (remotePeerId: string, offer: string) => {
-    console.log('Sending offer to', remotePeerId);
+    this.log('info', 'Sending offer to', remotePeerId);
     this.signalling.emit('offer', {
       sdp: offer,
       peerId: remotePeerId,
@@ -157,7 +167,7 @@ export class ConvergeClient extends EventEmitter {
   };
 
   private handleLocalAnswer = (remotePeerId: string, answer: string) => {
-    console.log('Sending answer to', remotePeerId);
+    this.log('info', 'Sending answer to', remotePeerId);
     this.signalling.emit('answer', {
       sdp: answer,
       peerId: remotePeerId,
@@ -166,7 +176,7 @@ export class ConvergeClient extends EventEmitter {
   };
 
   private handleLocalCandidate = (remotePeerId: string, candidate: string) => {
-    console.log('Sending candidate to', remotePeerId);
+    this.log('info', 'Sending candidate to', remotePeerId);
     this.signalling.emit('candidate', {
       candidate: candidate,
       peerId: remotePeerId,
@@ -175,7 +185,7 @@ export class ConvergeClient extends EventEmitter {
   };
 
   private handleRemotePeerMessage = (remotePeerId: string, message: any) => {
-    console.debug('Remote peer message', remotePeerId, message);
+    this.log('debug', 'Remote peer message', remotePeerId, message);
     this.emit('peerMessage', remotePeerId, message);
   };
 
@@ -183,12 +193,11 @@ export class ConvergeClient extends EventEmitter {
     remotePeerId: string,
     presence: any,
   ) => {
-    console.debug('Presence changed', remotePeerId, presence);
+    this.log('debug', 'Presence changed', remotePeerId, presence);
     this.emit('peerPresenceChanged', remotePeerId, presence);
   };
 
   broadcast = (message: string) => {
-    console.log('Broadcasting', message);
     this.broadcastRaw('m', message);
   };
 
@@ -199,7 +208,6 @@ export class ConvergeClient extends EventEmitter {
   };
 
   updatePresence = (presence: any) => {
-    console.debug('Updating presence', presence);
     this._presence = presence;
     this.broadcastRaw('p', presence);
   };
@@ -242,9 +250,11 @@ export class ConvergeRemotePeer extends EventEmitter {
   });
   private dataChannels: Record<string, RTCDataChannel> = {};
   presence: any;
+  private log: Logger;
 
-  constructor(public id: string) {
+  constructor(public id: string, options?: { logger?: Logger }) {
     super();
+    this.log = options?.logger || (() => {});
 
     this.rtc.onicecandidate = this.handleIceCandidate;
     this.rtc.onnegotiationneeded = this.handleNegotiationNeeded;
@@ -276,11 +286,16 @@ export class ConvergeRemotePeer extends EventEmitter {
   };
 
   private handleNegotiationNeeded = () => {
-    console.log('Negotiation needed');
+    this.log('debug', this.id, 'Negotiation needed');
   };
 
   private handleIceConnectionStateChange = () => {
-    console.log('Ice connection state changed', this.rtc.iceConnectionState);
+    this.log(
+      'debug',
+      this.id,
+      'Ice connection state changed',
+      this.rtc.iceConnectionState,
+    );
     if (
       this.rtc.iceConnectionState === 'closed' ||
       this.rtc.iceConnectionState === 'failed' ||
@@ -291,11 +306,21 @@ export class ConvergeRemotePeer extends EventEmitter {
   };
 
   private handleIceGatheringStateChange = () => {
-    console.log('Ice gathering state changed', this.rtc.iceGatheringState);
+    this.log(
+      'debug',
+      this.id,
+      'Ice gathering state changed',
+      this.rtc.iceGatheringState,
+    );
   };
 
   private handleSignalingStateChange = () => {
-    console.log('Signaling state changed', this.rtc.signalingState);
+    this.log(
+      'debug',
+      this.id,
+      'Signaling state changed',
+      this.rtc.signalingState,
+    );
     if (this.rtc.signalingState === 'closed') {
       this.emit('disconnect', this.id);
     }
@@ -335,7 +360,7 @@ export class ConvergeRemotePeer extends EventEmitter {
   };
 
   handleDataChannel = (event: RTCDataChannelEvent) => {
-    console.log('received data channel', event.channel.label);
+    this.log('debug', this.id, 'received data channel', event.channel.label);
     const channel = event.channel;
     this.setupDataChannel(channel);
   };
@@ -349,20 +374,20 @@ export class ConvergeRemotePeer extends EventEmitter {
   };
 
   private handleDataChannelOpen = () => {
-    console.log('Data channel open');
+    this.log('debug', this.id, 'Data channel open');
     this.emit('connect', this.id);
   };
 
   private handleDataChannelClose = () => {
-    console.log('Data channel close');
+    this.log('debug', this.id, 'Data channel close');
   };
 
   private handleDataChannelError = (ev: Event) => {
-    console.error('Data channel error', ev);
+    this.log('error', this.id, 'Data channel error', ev);
   };
 
   private handleDataChannelMessage = (event: MessageEvent) => {
-    console.log('Data channel message', event.data);
+    this.log('debug', this.id, 'Data channel message', event.data);
     const [type, payload] = JSON.parse(event.data);
     if (type === 'p') {
       this.presence = payload;

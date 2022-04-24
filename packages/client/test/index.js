@@ -2,11 +2,14 @@ import { ConvergeClient } from '../dist';
 
 const client = new ConvergeClient({
   server: 'ws://localhost:2000',
-  topic: 'test'
+  topic: 'test',
+  logger: (level, ...args) => console[level](args),
 });
 client.on('connected', (id) => {
   client.updatePresence({ name: `User ${id}` });
-  document.getElementById('identity').innerText = `I am ${client.presence.name}`
+  document.getElementById(
+    'identity',
+  ).innerText = `I am ${client.presence.name}`;
 });
 
 const peers = document.getElementById('peers');
@@ -15,7 +18,7 @@ client.on('peerConnected', (peerId) => {
   peerEl.id = peerId;
   peerEl.class = 'peer';
   peers.appendChild(peerEl);
-})
+});
 client.on('peerPresenceChanged', (peerId, presence) => {
   const peerEl = document.getElementById(peerId);
   peerEl.innerText = presence.name;
