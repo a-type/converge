@@ -1,6 +1,9 @@
 {
   "name": "@a-type/converge-server",
-  "public": true,
+  "description": "Signalling and discovery server for @a-type/converge-client",
+  "private": false,
+  "author": "Grant Forrest <gaforres@gmail.com>",
+  "repository": "git@github.com:a-type/converge.git",
   "version": "0.1.0",
   "main": "./dist/index.js",
   "module": "./dist-esm/index.js",

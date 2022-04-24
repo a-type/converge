@@ -1,11 +1,18 @@
 import { EventEmitter } from 'events';
 import io, { Socket } from 'socket.io-client';
 
+enum ProtocolHeading {
+  Presence = 'p',
+  Broadcast = 'b',
+  DirectMessage = 'd',
+}
+
 export interface ConvergeClientEvents {
   connected(id: string): void;
   peerConnected(id: string): void;
   peerDisconnected(id: string): void;
-  peerMessage(id: string, message: any): void;
+  broadcast(id: string, message: any): void;
+  directMessage(id: string, message: any): void;
   peerPresenceChanged(id: string, presence: any): void;
 }
 
@@ -31,7 +38,7 @@ type Logger = (
 
 export class ConvergeClient extends EventEmitter {
   private signalling: Socket;
-  private peers: Record<string, ConvergeRemotePeer> = {};
+  private _peers: Record<string, ConvergeRemotePeer> = {};
   private _presence: any;
   private log: Logger;
 
@@ -41,6 +48,10 @@ export class ConvergeClient extends EventEmitter {
 
   get id(): string | undefined {
     return this.signalling.id;
+  }
+
+  get peers() {
+    return Object.keys(this._peers);
   }
 
   constructor(
@@ -90,37 +101,41 @@ export class ConvergeClient extends EventEmitter {
     for (const peerId of peers) {
       // connect to remote peers on first connect
       const peer = this.setupRemotePeer(peerId);
-      peer.connect();
+      peer._connect();
     }
   };
 
   private handlePeerDisconnected = (peerId: string) => {
-    delete this.peers[peerId];
+    delete this._peers[peerId];
     this.emit('peerDisconnected', peerId);
   };
 
   private setupRemotePeer = (peerId: string) => {
-    if (!this.peers[peerId]) {
-      this.peers[peerId] = new ConvergeRemotePeer(peerId);
-      this.peers[peerId].on('disconnect', this.handlePeerDisconnected);
-      this.peers[peerId].on('connect', this.handlePeerConnect);
-      this.peers[peerId].on('offer', this.handleLocalOffer);
-      this.peers[peerId].on('answer', this.handleLocalAnswer);
-      this.peers[peerId].on('candidate', this.handleLocalCandidate);
-      this.peers[peerId].on('message', this.handleRemotePeerMessage);
-      this.peers[peerId].on(
+    if (!this._peers[peerId]) {
+      this._peers[peerId] = new ConvergeRemotePeer(peerId);
+      this._peers[peerId].on('disconnect', this.handlePeerDisconnected);
+      this._peers[peerId].on('connect', this.handlePeerConnect);
+      this._peers[peerId].on('offer', this.handleLocalOffer);
+      this._peers[peerId].on('answer', this.handleLocalAnswer);
+      this._peers[peerId].on('candidate', this.handleLocalCandidate);
+      this._peers[peerId].on('message', this.handleRemotePeerMessage);
+      this._peers[peerId].on(
+        'directMessage',
+        this.handleRemotePeerDirectMessage,
+      );
+      this._peers[peerId].on(
         'presenceChanged',
         this.handleRemotePeerPresenceChanged,
       );
     }
-    return this.peers[peerId];
+    return this._peers[peerId];
   };
 
   private handlePeerConnect = (peerId: string) => {
     this.log('info', 'Peer connected', peerId);
     this.emit('peerConnected', peerId);
     // initial presence
-    this.peers[peerId]!.send(JSON.stringify(['p', this.presence]));
+    this._peers[peerId]!._sendRaw(JSON.stringify(['p', this.presence]));
   };
 
   private handleOffer = (offerMessage: {
@@ -130,7 +145,7 @@ export class ConvergeClient extends EventEmitter {
   }) => {
     this.log('debug', 'Got offer', offerMessage);
     const peer = this.setupRemotePeer(offerMessage.sourcePeerId);
-    peer.handleOffer(offerMessage);
+    peer._handleOffer(offerMessage);
   };
 
   private handleAnswer = (answerMessage: {
@@ -139,9 +154,9 @@ export class ConvergeClient extends EventEmitter {
     sourcePeerId: string;
   }) => {
     this.log('debug', 'Got answer', answerMessage);
-    const peer = this.peers[answerMessage.sourcePeerId];
+    const peer = this._peers[answerMessage.sourcePeerId];
     if (peer) {
-      peer.handleAnswer(answerMessage);
+      peer._handleAnswer(answerMessage);
     }
   };
 
@@ -151,9 +166,9 @@ export class ConvergeClient extends EventEmitter {
     sourcePeerId: string;
   }) => {
     this.log('debug', 'Got candidate', candidateMessage);
-    const peer = this.peers[candidateMessage.sourcePeerId];
+    const peer = this._peers[candidateMessage.sourcePeerId];
     if (peer) {
-      peer.handleCandidate(candidateMessage);
+      peer._handleCandidate(candidateMessage);
     }
   };
 
@@ -186,7 +201,15 @@ export class ConvergeClient extends EventEmitter {
 
   private handleRemotePeerMessage = (remotePeerId: string, message: any) => {
     this.log('debug', 'Remote peer message', remotePeerId, message);
-    this.emit('peerMessage', remotePeerId, message);
+    this.emit('broadcast', remotePeerId, message);
+  };
+
+  private handleRemotePeerDirectMessage = (
+    remotePeerId: string,
+    message: any,
+  ) => {
+    this.log('debug', 'Remote peer direct message', remotePeerId, message);
+    this.emit('directMessage', remotePeerId, message);
   };
 
   private handleRemotePeerPresenceChanged = (
@@ -198,18 +221,31 @@ export class ConvergeClient extends EventEmitter {
   };
 
   broadcast = (message: string) => {
-    this.broadcastRaw('m', message);
+    this.broadcastRaw(ProtocolHeading.Broadcast, message);
   };
 
   private broadcastRaw = (type: string, message: string) => {
-    for (const peer of Object.values(this.peers)) {
-      peer.send(JSON.stringify([type, message]));
+    for (const peer of Object.values(this._peers)) {
+      peer._sendRaw(JSON.stringify([type, message]));
     }
   };
 
   updatePresence = (presence: any) => {
     this._presence = presence;
-    this.broadcastRaw('p', presence);
+    this.broadcastRaw(ProtocolHeading.Presence, presence);
+  };
+
+  getPresence = (peerId: string) => {
+    return this._peers[peerId]?.presence ?? null;
+  };
+
+  directMessage = (peerId: string, message: string) => {
+    if (!this._peers[peerId]) {
+      throw new Error(`Peer ${peerId} not connected`);
+    }
+    this._peers[peerId]._sendRaw(
+      JSON.stringify([ProtocolHeading.DirectMessage, message]),
+    );
   };
 }
 
@@ -222,6 +258,7 @@ export interface ConvergeRemotePeerEvents {
   offer(peerId: string, offer: string): void;
   answer(peerId: string, answer: string): void;
   message(peerId: string, message: any): void;
+  directMessage(peerId: string, message: any): void;
   presenceChanged(peerId: string, presence: any): void;
 }
 
@@ -261,10 +298,10 @@ export class ConvergeRemotePeer extends EventEmitter {
     this.rtc.oniceconnectionstatechange = this.handleIceConnectionStateChange;
     this.rtc.onicegatheringstatechange = this.handleIceGatheringStateChange;
     this.rtc.onsignalingstatechange = this.handleSignalingStateChange;
-    this.rtc.ondatachannel = this.handleDataChannel;
+    this.rtc.ondatachannel = this._handleDataChannel;
   }
 
-  connect = async () => {
+  _connect = async () => {
     this.setupDefaultDataChannel();
     await this.rtc.createOffer().then(this.onLocalOffer);
   };
@@ -326,7 +363,7 @@ export class ConvergeRemotePeer extends EventEmitter {
     }
   };
 
-  handleOffer = (offerMessage: { sdp: string }) => {
+  _handleOffer = (offerMessage: { sdp: string }) => {
     this.rtc.setRemoteDescription(
       new RTCSessionDescription({
         type: 'offer',
@@ -341,7 +378,7 @@ export class ConvergeRemotePeer extends EventEmitter {
     this.setupDataChannel(dataChannel);
   };
 
-  handleAnswer = (answerMessage: { sdp: string }) => {
+  _handleAnswer = (answerMessage: { sdp: string }) => {
     this.rtc.setRemoteDescription(
       new RTCSessionDescription({
         type: 'answer',
@@ -350,7 +387,7 @@ export class ConvergeRemotePeer extends EventEmitter {
     );
   };
 
-  handleCandidate = (candidateMessage: {
+  _handleCandidate = (candidateMessage: {
     candidate: string;
     peerId: string;
   }) => {
@@ -359,7 +396,7 @@ export class ConvergeRemotePeer extends EventEmitter {
     );
   };
 
-  handleDataChannel = (event: RTCDataChannelEvent) => {
+  _handleDataChannel = (event: RTCDataChannelEvent) => {
     this.log('debug', this.id, 'received data channel', event.channel.label);
     const channel = event.channel;
     this.setupDataChannel(channel);
@@ -388,16 +425,18 @@ export class ConvergeRemotePeer extends EventEmitter {
 
   private handleDataChannelMessage = (event: MessageEvent) => {
     this.log('debug', this.id, 'Data channel message', event.data);
-    const [type, payload] = JSON.parse(event.data);
-    if (type === 'p') {
+    const [type, payload] = JSON.parse(event.data) as [ProtocolHeading, any];
+    if (type === ProtocolHeading.Presence) {
       this.presence = payload;
       this.emit('presenceChanged', this.id, payload);
-    } else if (type === 'm') {
+    } else if (type === ProtocolHeading.Broadcast) {
       this.emit('message', this.id, payload);
+    } else if (type === ProtocolHeading.DirectMessage) {
+      this.emit('directMessage', this.id, payload);
     }
   };
 
-  send = (message: any) => {
+  _sendRaw = (message: any) => {
     const channel = this.dataChannels[DATA_CHANNEL_LABEL];
     if (channel) {
       channel.send(message);
@@ -405,5 +444,19 @@ export class ConvergeRemotePeer extends EventEmitter {
       throw new Error('no data channel');
     }
     // TODO: enqueue
+  };
+
+  /**
+   * Sends a message only to this peer.
+   */
+  sendMessage = (message: any) => {
+    this._sendRaw(JSON.stringify(['m', message]));
+  };
+
+  /**
+   * Sends your presence to this peer.
+   */
+  sendPresence = (presence: any) => {
+    this._sendRaw(JSON.stringify(['p', presence]));
   };
 }
